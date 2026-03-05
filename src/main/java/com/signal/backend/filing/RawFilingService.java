@@ -2,12 +2,14 @@ package com.signal.backend.filing;
 
 import com.signal.backend.company.Company;
 import com.signal.backend.company.CompanyService;
+import com.signal.backend.document.FilingDocumentService;
 import com.signal.backend.edgar.EdgarClient;
 import com.signal.backend.edgar.EdgarFeedEntry;
 import com.signal.backend.fetchstate.FetchState;
 import com.signal.backend.fetchstate.FetchStateRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,19 +27,28 @@ public class RawFilingService {
     private final CompanyService companyService;
     private final RawFilingRepository rawFilingRepository;
     private final FetchStateRepository fetchStateRepository;
+    private final FilingDocumentService filingDocumentService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public RawFilingService(EdgarClient edgarClient,
                             CompanyService companyService,
                             RawFilingRepository rawFilingRepository,
-                            FetchStateRepository fetchStateRepository) {
+                            FetchStateRepository fetchStateRepository,
+                            FilingDocumentService filingDocumentService,
+                            ApplicationEventPublisher eventPublisher) {
         this.edgarClient = edgarClient;
         this.companyService = companyService;
         this.rawFilingRepository = rawFilingRepository;
         this.fetchStateRepository = fetchStateRepository;
+        this.filingDocumentService = filingDocumentService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
     public int fetchAndPersist() {
+        log.info("Checking for unparsed backlog before fetch");
+        filingDocumentService.parseUnparsed();
+
         FetchState state = fetchStateRepository.findAll()
                 .stream()
                 .findFirst()
@@ -82,6 +93,7 @@ public class RawFilingService {
                 try {
                     // Force INSERT now so unique-key collisions are handled per-row.
                     rawFilingRepository.saveAndFlush(filing);
+                    eventPublisher.publishEvent(new RawFilingCreatedEvent(filing.getId()));
                     newFilingsCount++;
                     log.debug("Persisted new filing: {} ({})", entry.accessionNumber(), entry.companyName());
                 } catch (DataIntegrityViolationException ex) {
